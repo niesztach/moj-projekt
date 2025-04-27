@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Gra WebSocket - 2 Graczy (SessionStorage)</title>
+  <style>
+    canvas { border: 1px solid black; }
+    #selection { margin: 20px; }
+  </style>
+</head>
+<body>
+  <!-- Formularz wyboru roli -->
+  <div id="selection"></div>
+  <!-- Canvas gry – domyślnie ukryty -->
+  <canvas id="gameCanvas" width="400" height="400" style="display: none;"></canvas>
+  <!-- Opcjonalny przycisk resetu roli -->
+  <button id="resetBtn" style="display: none;" onclick="resetRole()">Reset roli</button>
+
+  <div id="info"></div>
+  <canvas id="gameCanvas" width="400" height="100"></canvas>
+  <button id="rollBtn">Roll Dice</button>
+  <div id="scoreboard"></div>
+
+
+  <!-- <script>
+    // Pobieramy parametr 'room' z URL, np. ?room=game1
+    const urlParams = new URLSearchParams(window.location.search);
+    const room = urlParams.get('room') || 'default';
+
+    // Korzystamy z sessionStorage – każda karta ma osobne dane
+    let playerRole = sessionStorage.getItem(`playerRole_${room}`);
+
+    function showGameUI() {
+      document.getElementById('selection').style.display = 'none';
+      document.getElementById('gameCanvas').style.display = 'block';
+      document.getElementById('resetBtn').style.display = 'block';
+    }
+
+    function resetRole() {
+      sessionStorage.removeItem(`playerRole_${room}`);
+      location.reload();
+    }
+
+    // Inicjalizacja wyboru roli
+    function initGame(roleChosen) {
+      playerRole = roleChosen;
+      sessionStorage.setItem(`playerRole_${room}`, playerRole);
+      showGameUI();
+      startGame();
+    }
+
+    // Jeśli rola nie została jeszcze wybrana, pokaż formularz
+    if (!playerRole) {
+      const selectionDiv = document.getElementById('selection');
+      selectionDiv.innerHTML = `
+        <h3>Wybierz rolę:</h3>
+        <button id="chooseBlue">Blue</button>
+        <button id="chooseRed">Red</button>
+      `;
+      document.getElementById('chooseBlue').addEventListener('click', () => initGame('blue'));
+      document.getElementById('chooseRed').addEventListener('click', () => initGame('red'));
+    } else {
+      showGameUI();
+      startGame();
+    }
+
+    function startGame() {
+      // Przypisanie kodu roli: 0 dla blue, 1 dla red
+      const roleCode = playerRole === 'blue' ? 0 : 1;
+      const socket = new WebSocket(`ws://localhost:8081/?room=${room}`);
+      socket.binaryType = 'arraybuffer';
+
+      socket.addEventListener('open', () => {
+        console.log(`Połączono z serwerem w pokoju: ${room} jako ${playerRole}`);
+        // Wysyłamy komunikat typu join: [0, roleCode]
+        const joinMsg = new Uint8Array(2);
+        joinMsg[0] = 0; // join
+        joinMsg[1] = roleCode;
+        socket.send(joinMsg.buffer);
+      });
+
+      socket.addEventListener('message', (event) => {
+        const data = new Uint8Array(event.data);
+        const messageType = data[0];
+
+        if (messageType === 1) { // move message: [1, role, x_hi, x_lo, y_hi, y_lo]
+          if (data.length >= 6) {
+            const receivedRole = data[1] === 0 ? 'blue' : 'red';
+            const x = (data[2] << 8) | data[3];
+            const y = (data[4] << 8) | data[5];
+            // Uaktualniamy pozycję tylko przeciwnika
+            if (receivedRole !== playerRole) {
+              gameState[receivedRole].x = x;
+              gameState[receivedRole].y = y;
+              drawGame();
+            }
+          }
+        } else if (messageType === 9) {
+          console.log("Dołączenie potwierdzone przez serwer");
+        } else {
+          console.log("Odebrano wiadomość:", data);
+        }
+      });
+
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+
+      // Stan gry – traktujemy każdy pion niezależnie
+      const defaultState = {
+        blue: { x: 50, y: 50 },
+        red: { x: 350, y: 350 }
+      };
+      let gameState = defaultState;
+
+      // Próba odtworzenia stanu gry z sessionStorage (tylko dla bieżącej karty)
+      const savedState = sessionStorage.getItem(`gameState_${room}`);
+      if (savedState) {
+        try {
+          gameState = JSON.parse(savedState);
+        } catch (e) {
+          gameState = defaultState;
+        }
+      }
+
+      function drawGame() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Rysowanie pionu blue
+        ctx.fillStyle = 'blue';
+        ctx.beginPath();
+        ctx.arc(gameState.blue.x, gameState.blue.y, 20, 0, Math.PI * 2);
+        ctx.fill();
+        // Rysowanie pionu red
+        ctx.fillStyle = 'red';
+        ctx.beginPath();
+        ctx.arc(gameState.red.x, gameState.red.y, 20, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function sendPlayerMove(x, y) {
+        const buffer = new ArrayBuffer(6);
+        const view = new DataView(buffer);
+        view.setUint8(0, 1);          // typ: move
+        view.setUint8(1, roleCode);   // nasz kod roli
+        view.setUint16(2, x);         // x (16-bit)
+        view.setUint16(4, y);         // y (16-bit)
+        socket.send(buffer);
+      }
+
+      canvas.addEventListener('click', (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        // Aktualizujemy stan dla naszego pionu
+        gameState[playerRole].x = x;
+        gameState[playerRole].y = y;
+        drawGame();
+        sendPlayerMove(x, y);
+      });
+
+      // Zapisujemy stan gry co 2 sekundy specyficznie dla bieżącej karty
+      function drawGame() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Rysowanie pionu blue
+  ctx.fillStyle = 'blue';
+  ctx.beginPath();
+  ctx.arc(gameState.blue.x, gameState.blue.y, 20, 0, Math.PI * 2);
+  ctx.fill();
+  // Rysowanie pionu red
+  ctx.fillStyle = 'red';
+  ctx.beginPath();
+  ctx.arc(gameState.red.x, gameState.red.y, 20, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Zapisujemy stan gry natychmiast po narysowaniu
+  sessionStorage.setItem(`gameState_${room}`, JSON.stringify(gameState));
+}
+
+
+      // Pierwsze rysowanie
+      drawGame();
+    }
+  </script> -->
+
+  <script>
+    const room = new URLSearchParams(location.search).get('room')||'default';
+    const ws = new WebSocket(`ws://localhost:8081/?room=${room}`);
+    let myRole; // 'blue'|'red'
+    let state;  // pełne gameState z serwera
+    
+    ws.onopen = () => {
+      // wybór roli jak poprzednio...
+      ws.send(JSON.stringify({type:'join', payload:{role:myRole}}));
+    };
+    ws.onmessage = ({data}) => {
+      const msg = JSON.parse(data);
+      if (msg.type==='stateUpdate') {
+        state = msg.state;
+        renderAll();
+      }
+    };
+    
+    // Rysowanie 5 kości
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    function drawDice() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const dice = state.dice[myRole];
+      const locked = state.locked[myRole];
+      dice.forEach((d,i)=>{
+        const x = 20 + i*70, y=20;
+        ctx.fillStyle= locked[i]?'lightgray':'white';
+        ctx.fillRect(x,y,60,60);
+        ctx.strokeRect(x,y,60,60);
+        ctx.fillStyle='black';
+        ctx.fillText(d,x+25,y+35);
+      });
+    }
+    
+    // Przy kliknięciu na szkło – toggle lock
+    canvas.addEventListener('click', e=>{
+      const i = Math.floor((e.offsetX-20)/70);
+      if (i>=0 && i<5 && state.whoseTurn===myRole && state.phase==='rolling') {
+        ws.send(JSON.stringify({type:'lock', payload:{index:i}}));
+      }
+    });
+    
+    // Roll button
+    document.getElementById('rollBtn')
+      .addEventListener('click', ()=>{
+        if (state.whoseTurn===myRole && state.phase==='rolling' && state.rollsLeft[myRole]>0)
+          ws.send(JSON.stringify({type:'roll'}));
+      });
+    
+    // Prosta tabela wyników
+    function renderScoreboard() {
+      const sb = document.getElementById('scoreboard');
+      sb.innerHTML = '';
+      const me = myRole, opp = me==='blue'?'red':'blue';
+      ['ones','twos','threes','fours','fives','sixes','chance','yatzee'].forEach(cat=>{
+        const mine = state.scorecard[me][cat] ?? '-';
+        const theirs = state.scorecard[opp][cat] ?? '-';
+        const btn = (state.whoseTurn===me && state.phase==='scoring' && state.scorecard[me][cat]==null)
+          ? `<button onclick="choose('${cat}')">✎</button>` : '';
+        sb.innerHTML += `<div>${cat}: ${mine} ${btn} | opp: ${theirs}</div>`;
+      });
+    }
+    function choose(category) {
+      // prosty compute, np. dla 'chance' sumujemy, dla 'ones' sumujemy jedynki...
+      const dice = state.dice[myRole];
+      let compute = 0;
+      if (category==='chance') compute = dice.reduce((a,b)=>a+b,0);
+      else if (category==='yatzee') compute = dice.every(d=>d===dice[0])?50:0;
+      else {
+        const target = ['ones','twos','threes','fours','fives','sixes'].indexOf(category)+1;
+        compute = dice.filter(d=>d===target).length * target;
+      }
+      ws.send(JSON.stringify({type:'score', payload:{category, compute}}));
+    }
+    
+    function renderAll(){
+      drawDice();
+      document.getElementById('rollBtn').innerText =
+        `Roll (${state.rollsLeft[myRole]} left)`;
+      renderScoreboard();
+      // ewentualnie info o turze:
+      document.getElementById('info').innerText =
+        `Turn: ${state.whoseTurn}`;
+    }
+    </script>
+    
+</body>
+</html>

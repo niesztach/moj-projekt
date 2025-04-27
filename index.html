@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Yathzee Online</title>
+  <style>
+    body   { font-family: sans-serif; }
+    #lobby, #gameUI { margin: 20px; }
+    canvas { border: 1px solid #000; display: block; margin-bottom: 10px; }
+    #playersList li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <!-- LOBBY -->
+  <div id="lobby">
+    <h2>Yathzee Online</h2>
+    <div>
+      <label>Twoja nazwa:
+        <input id="playerNameInput" placeholder="np. Ania" />
+      </label>
+    </div>
+    <div style="margin-top:8px;">
+      <input id="joinRoomInput" placeholder="Nazwa pokoju" />
+      <button id="btnCreateRoom">Stwórz</button>
+      <button id="btnJoinRoom">Dołącz</button>
+    </div>
+    <hr/>
+    <h3>Pokój: <span id="roomName">—</span></h3>
+    <ul id="playersList"></ul>
+    <button id="startGameBtn" disabled>Rozpocznij grę</button>
+  </div>
+
+  <!-- GRA (ukryte do startu) -->
+  <div id="gameUI" style="display:none;">
+    <div id="info" style="margin-bottom:8px;"></div>
+    <canvas id="gameCanvas" width="400" height="100"></canvas>
+    <button id="rollBtn">Rzuć kostkami</button>
+    <div id="scoreboard" style="margin-top:10px;"></div>
+  </div>
+
+  <script>
+  (function(){
+    let room = null;
+    let playerId = null;
+    let ws = null;
+    let state = null;
+    let isReconnecting = false;
+
+    const lobbyDiv    = document.getElementById('lobby');
+    const gameDiv     = document.getElementById('gameUI');
+    const nameInput   = document.getElementById('playerNameInput');
+    const roomInput   = document.getElementById('joinRoomInput');
+    const btnCreate   = document.getElementById('btnCreateRoom');
+    const btnJoin     = document.getElementById('btnJoinRoom');
+    const startBtn    = document.getElementById('startGameBtn');
+    const roomNameSp  = document.getElementById('roomName');
+    const playersList = document.getElementById('playersList');
+    const infoDiv     = document.getElementById('info');
+    const canvas      = document.getElementById('gameCanvas');
+    const ctx         = canvas.getContext('2d');
+    const rollBtn     = document.getElementById('rollBtn');
+    const scoreboard  = document.getElementById('scoreboard');
+
+    // Recover session
+    const storedName = sessionStorage.getItem('playerName');
+    const storedRoom = sessionStorage.getItem('room');
+    const storedId   = sessionStorage.getItem('playerId');
+    if (storedName && storedRoom && storedId) {
+      nameInput.value = storedName;
+      roomInput.value = storedRoom;
+      isReconnecting = true;
+      loadState();
+      enterLobby(storedRoom);
+      return;
+    }
+
+    btnCreate.addEventListener('click', () => enterLobby(roomInput.value.trim()));
+    btnJoin.addEventListener('click', () => enterLobby(roomInput.value.trim()));
+
+    function enterLobby(roomName) {
+      const playerName = nameInput.value.trim();
+      if (!playerName) return alert('Podaj nie-pustą nazwę gracza!');
+      if (!roomName)   return alert('Podaj nazwę pokoju!');
+      room = roomName;
+      roomNameSp.textContent = room;
+      nameInput.disabled = roomInput.disabled = btnCreate.disabled = btnJoin.disabled = true;
+      connectWebSocket(playerName);
+    }
+
+    function connectWebSocket(playerName) {
+      ws = new WebSocket(`ws://${location.hostname}:8081/?room=${room}`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        if (isReconnecting) {
+          ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId: sessionStorage.getItem('playerId') }}));
+        } else {
+          ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
+        }
+        startBtn.addEventListener('click', onStartClick);
+        rollBtn.addEventListener('click', onRollClick);
+      };
+
+      ws.onmessage = ({ data }) => {
+        const msg = JSON.parse(data);
+        switch(msg.type) {
+          case 'joined':
+            playerId = msg.playerId;
+            sessionStorage.setItem('playerId', playerId);
+            sessionStorage.setItem('playerName', nameInput.value.trim());
+            sessionStorage.setItem('room', room);
+            break;
+          case 'lobbyUpdate':
+            renderLobby(msg.players);
+            break;
+          case 'gameStart':
+            state = msg.state;
+            saveState(); // Save initial state
+            startGame();
+            isReconnecting = false;
+            break;
+          case 'stateUpdate':
+            state = msg.state;
+            saveState(); // Save updated state
+            if (isReconnecting) {
+              startGame();
+              isReconnecting = false;
+            } else {
+              renderGame();
+            }
+            break;
+          case 'error':
+            alert(msg.msg);
+            break;
+        }
+      };
+
+      ws.onclose = () => alert('Rozłączono z serwerem');
+    }
+
+    function onStartClick() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type:'start' }));
+    }
+    function onRollClick() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!state) return;
+      if (state.whoseTurn === playerId && state.phase === 'rolling' && state.rollsLeft[playerId] > 0) {
+        ws.send(JSON.stringify({ type:'roll' }));
+      }
+    }
+
+    function renderLobby(players) {
+      playersList.innerHTML = players.map(n => `<li>${n}</li>`).join('');
+      startBtn.disabled = !(players.length >= 2 && players[0] === nameInput.value.trim());
+    }
+
+    function startGame() {
+      lobbyDiv.style.display = 'none';
+      gameDiv.style.display  = 'block';
+      canvas.addEventListener('click', e => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!state) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const idx = Math.floor((x - 20) / 70);
+        if (idx >= 0 && idx < 5 && state.whoseTurn === playerId && state.phase === 'rolling') {
+          ws.send(JSON.stringify({ type:'lock', payload:{ index: idx } }));
+        }
+      });
+      renderGame();
+    }
+
+    function renderGame() {
+      if (!state) return;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.font = '20px sans-serif';
+      const dice   = state.dice[playerId];
+      const locked = state.locked[playerId];
+      dice.forEach((d,i) => {
+        const x = 20 + i*70, size = 60;
+        ctx.fillStyle = locked[i] ? '#ddd' : '#fff';
+        ctx.fillRect(x,20,size,size);
+        ctx.strokeRect(x,20,size,size);
+        ctx.fillStyle = '#000'; ctx.fillText(d, x+25, 55);
+      });
+      infoDiv.textContent =
+        `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft[playerId]}`;
+      const cats = ['ones','twos','threes','fours','fives','sixes','chance','yatzee'];
+      scoreboard.innerHTML = cats.map(cat => {
+        const val = state.scorecard[playerId][cat] ?? '-';
+        return `<div><b>${cat}:</b> ${val}</div>`;
+      }).join('');
+    }
+
+    function saveState() {
+  if (state) {
+    sessionStorage.setItem('gameState', JSON.stringify(state));
+  }
+}
+
+function loadState() {
+  const saved = sessionStorage.getItem('gameState');
+  if (saved) {
+    state = JSON.parse(saved);
+    startGame(); // od razu pokaż UI gry
+    renderGame();
+  }
+}
+
+  })();
+  </script>
+</body>
+</html>
