@@ -35,7 +35,18 @@
     <div id="info" style="margin-bottom:8px;"></div>
     <canvas id="gameCanvas" width="400" height="100"></canvas>
     <button id="rollBtn">Rzuć kostkami</button>
-    <div id="scoreboard" style="margin-top:10px;"></div>
+    <table id="scoreboard" style="margin-top:10px; border-collapse: collapse; border: 1px solid black;"></table>
+  <thead>
+    <tr>
+      <th>Kategoria</th>
+      <!-- nagłówki graczy w JS uzupełnimy dynamicznie -->
+    </tr>
+  </thead>
+  <tbody>
+    <!-- wiersze z kategoriami też wypełnimy JS-em -->
+  </tbody>
+</table>
+
   </div>
 
   <script>
@@ -66,6 +77,7 @@
     const storedRoom = sessionStorage.getItem('room');
     const storedId   = sessionStorage.getItem('playerId');
     if (storedName && storedRoom && storedId) {
+      playerId = storedId; // <-- odczytujemy ID gracza
       nameInput.value = storedName;
       roomInput.value = storedRoom;
       isReconnecting = true;
@@ -91,49 +103,66 @@
       ws = new WebSocket(`ws://${location.hostname}:8081/?room=${room}`);
       ws.binaryType = 'arraybuffer';
 
-      ws.onopen = () => {
-        if (isReconnecting) {
-          ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId: sessionStorage.getItem('playerId') }}));
-        } else {
-          ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
-        }
-        startBtn.addEventListener('click', onStartClick);
-        rollBtn.addEventListener('click', onRollClick);
-      };
+      // ws.onopen = () => {
+      //   if (isReconnecting) {
+      //     ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId: sessionStorage.getItem('playerId') }}));
+      //   } else {
+      //     ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
+      //   }
+      //   startBtn.addEventListener('click', onStartClick);
+      //   rollBtn.addEventListener('click', onRollClick);
+      // };
 
-      ws.onmessage = ({ data }) => {
-        const msg = JSON.parse(data);
-        switch(msg.type) {
-          case 'joined':
-            playerId = msg.playerId;
-            sessionStorage.setItem('playerId', playerId);
-            sessionStorage.setItem('playerName', nameInput.value.trim());
-            sessionStorage.setItem('room', room);
-            break;
-          case 'lobbyUpdate':
-            renderLobby(msg.players);
-            break;
-          case 'gameStart':
-            state = msg.state;
-            saveState(); // Save initial state
-            startGame();
-            isReconnecting = false;
-            break;
-          case 'stateUpdate':
-            state = msg.state;
-            saveState(); // Save updated state
-            if (isReconnecting) {
-              startGame();
-              isReconnecting = false;
-            } else {
-              renderGame();
-            }
-            break;
-          case 'error':
-            alert(msg.msg);
-            break;
+        ws.onopen = () => {
+    if (isReconnecting) {
+      ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId }}));
+    } else {
+      ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
+    }
+    // te dwie linijki dodaj raz – nie będą się zdublują dzięki wewnętrznej ochronie w addEventListener
+    startBtn.addEventListener('click', onStartClick);
+    rollBtn.addEventListener('click', onRollClick);
+  };
+
+
+
+       ws.onmessage = ({ data }) => {
+      const msg = JSON.parse(data);
+      switch (msg.type) {
+        case 'joined':
+          playerId = msg.playerId;
+          sessionStorage.setItem('playerId', playerId);
+          sessionStorage.setItem('playerName', nameInput.value.trim());
+          sessionStorage.setItem('room', room);
+          break;
+        case 'lobbyUpdate':
+          renderLobby(msg.players);
+          break;
+        case 'gameStart':
+          state = msg.state;
+          saveState();
+          // **zawsze** otwieramy UI stołu przy pierwszym starcie
+          startGame();
+          renderGame();
+          // upewniamy się, że nie jesteśmy już w trybie reconnect
+          isReconnecting = false;
+      break;
+      case 'stateUpdate':
+        state = msg.state;
+        saveState();
+        // przy reconnect dajemy też „wejście” do stołu
+        if (isReconnecting) {
+          startGame();
+          isReconnecting = false;
         }
-      };
+      renderGame();
+      break;
+        case 'error':
+          alert(msg.msg);
+          break;
+      }
+    };
+
 
       ws.onclose = () => alert('Rozłączono z serwerem');
     }
@@ -169,29 +198,98 @@
         }
       });
       renderGame();
+      initScoreboard();
     }
 
     function renderGame() {
-      if (!state) return;
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      ctx.font = '20px sans-serif';
-      const dice   = state.dice[playerId];
-      const locked = state.locked[playerId];
-      dice.forEach((d,i) => {
-        const x = 20 + i*70, size = 60;
-        ctx.fillStyle = locked[i] ? '#ddd' : '#fff';
-        ctx.fillRect(x,20,size,size);
-        ctx.strokeRect(x,20,size,size);
-        ctx.fillStyle = '#000'; ctx.fillText(d, x+25, 55);
-      });
-      infoDiv.textContent =
-        `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft[playerId]}`;
-      const cats = ['ones','twos','threes','fours','fives','sixes','chance','yatzee'];
-      scoreboard.innerHTML = cats.map(cat => {
-        const val = state.scorecard[playerId][cat] ?? '-';
-        return `<div><b>${cat}:</b> ${val}</div>`;
-      }).join('');
-    }
+  if (!state || !state.dice || !state.dice[playerId]) {
+    console.warn('Brak danych do narysowania gry.');
+    return;
+  }
+
+  // tabela wyników
+
+  const categories = ['ones','twos','threes','fours','fives','sixes','chance','yatzee'];
+let playerOrder = []; // tu będzie kolejność graczy w pokoju
+
+function initScoreboard() {
+  // wyciągamy nagłówki i ciało tabeli
+  const theadTr = scoreboard.querySelector('thead tr');
+  const tbody   = scoreboard.querySelector('tbody');
+  theadTr.innerHTML = '<th>Kategoria</th>';
+  tbody.innerHTML  = '';
+
+  // ustalamy kolejność graczy (np. z ostatniego msg.players)
+  playerOrder = Array.from(playersList.querySelectorAll('li')).map(li => li.textContent);
+
+  // nagłówki z nazwami graczy
+  playerOrder.forEach(name => {
+    const th = document.createElement('th');
+    th.textContent = name;
+    theadTr.appendChild(th);
+  });
+
+  // wiersze kategorii
+  categories.forEach(cat => {
+    const tr = document.createElement('tr');
+    tr.dataset.category = cat;
+    const tdLabel = document.createElement('td');
+    tdLabel.textContent = cat;
+    tr.appendChild(tdLabel);
+    playerOrder.forEach(_ => {
+      const td = document.createElement('td');
+      td.dataset.category = cat;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function renderScoreboard() {
+  const tbody = scoreboard.querySelector('tbody');
+  // dla każdego wiersza
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const cat = tr.dataset.category;
+    tr.querySelectorAll('td').forEach((td, idx) => {
+      // idx=0 to label, więc zaczynamy od idx=1
+      if (idx === 0) return;
+      const playerName = playerOrder[idx-1];
+      // znajdź playerId po nazwie
+      const pid = Array.from(stateOrderOfPlayers())  // musisz mieć funkcję, która zwraca listę playerId w tej samej kolejności co nazwy
+                     .find(id => room.players.get(id).name === playerName);
+      const val = state.scorecard[pid][cat];
+      td.textContent = val == null ? '-' : val;
+      // kontrola kliknięcia
+      if (pid === playerId && state.whoseTurn === playerId && state.phase === 'scoring' && val == null) {
+        td.classList.add('clickable');
+      } else {
+        td.classList.remove('clickable');
+      }
+    });
+  });
+}
+
+// koniec tabeli wyników
+  
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = '20px sans-serif';
+  const dice   = state.dice[playerId];
+  const locked = state.locked[playerId];
+  dice.forEach((d, i) => {
+    const x = 20 + i * 70, size = 60;
+    ctx.fillStyle = locked[i] ? '#ddd' : '#fff';
+    ctx.fillRect(x, 20, size, size);
+    ctx.strokeRect(x, 20, size, size);
+    ctx.fillStyle = '#000';
+    ctx.fillText(d, x + 25, 55);
+  });
+
+  infoDiv.textContent =
+    `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft[playerId]}`;
+
+  // Aktualizacja tabeli wyników
+  renderScoreboard();
+}
 
     function saveState() {
   if (state) {

@@ -41,13 +41,28 @@ function broadcastState(room) {
 
 // Wysyła do wszystkich listę graczy w lobby
 function broadcastLobby(roomId) {
+  // pobieramy z mapy `games`
   const room = games.get(roomId);
+  if (!room) {
+    console.warn('broadcastLobby: pokój nie istnieje:', roomId);
+    return;
+  }
   const list = Array.from(room.players.values()).map(p => p.name);
-  const msg  = JSON.stringify({ type: 'lobbyUpdate', players: list });
   for (const { ws } of room.players.values()) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lobbyUpdate', players: list }));
+    }
   }
 }
+
+// function broadcastLobby(roomId) {
+//   const room = games.get(roomId);
+//   const list = Array.from(room.players.values()).map(p => p.name);
+//   const msg  = JSON.stringify({ type: 'lobbyUpdate', players: list });
+//   for (const { ws } of room.players.values()) {
+//     if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+//   }
+// }
 
 server.on('connection', (ws, req) => {
   const roomId = url.parse(req.url, true).query.room || 'default';
