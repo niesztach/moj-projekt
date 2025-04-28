@@ -2,18 +2,22 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8">
-  <title>Yathzee Online</title>
+  <title>Yahtzee Online</title>
   <style>
-    body   { font-family: sans-serif; }
+    body { font-family: sans-serif; }
     #lobby, #gameUI { margin: 20px; }
     canvas { border: 1px solid #000; display: block; margin-bottom: 10px; }
     #playersList li { margin-bottom: 4px; }
+    table { margin-top:10px; border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #000; padding: 4px; text-align: center; }
+    td.clickable { cursor: pointer; background: #e0ffe0; }
+    td.disabled { color: #888; cursor: default; }
   </style>
 </head>
 <body>
   <!-- LOBBY -->
   <div id="lobby">
-    <h2>Yathzee Online</h2>
+    <h2>Yahtzee Online</h2>
     <div>
       <label>Twoja nazwa:
         <input id="playerNameInput" placeholder="np. Ania" />
@@ -35,18 +39,13 @@
     <div id="info" style="margin-bottom:8px;"></div>
     <canvas id="gameCanvas" width="400" height="100"></canvas>
     <button id="rollBtn">Rzuć kostkami</button>
-    <table id="scoreboard" style="margin-top:10px; border-collapse: collapse; border: 1px solid black;"></table>
-  <thead>
-    <tr>
-      <th>Kategoria</th>
-      <!-- nagłówki graczy w JS uzupełnimy dynamicznie -->
-    </tr>
-  </thead>
-  <tbody>
-    <!-- wiersze z kategoriami też wypełnimy JS-em -->
-  </tbody>
-</table>
 
+    <table id="scoreboard">
+      <thead>
+        <tr><th>Kategoria</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
   <script>
@@ -56,6 +55,7 @@
     let ws = null;
     let state = null;
     let isReconnecting = false;
+    let lastLobbyPlayers = []; // array of {id,name}
 
     const lobbyDiv    = document.getElementById('lobby');
     const gameDiv     = document.getElementById('gameUI');
@@ -71,17 +71,18 @@
     const ctx         = canvas.getContext('2d');
     const rollBtn     = document.getElementById('rollBtn');
     const scoreboard  = document.getElementById('scoreboard');
+    const categories  = ['ones','twos','threes','fours','fives','sixes','chance','yatzee'];
+    let playerOrderIds = [];
 
     // Recover session
     const storedName = sessionStorage.getItem('playerName');
     const storedRoom = sessionStorage.getItem('room');
     const storedId   = sessionStorage.getItem('playerId');
     if (storedName && storedRoom && storedId) {
-      playerId = storedId; // <-- odczytujemy ID gracza
+      playerId = storedId;
       nameInput.value = storedName;
       roomInput.value = storedRoom;
       isReconnecting = true;
-      loadState();
       enterLobby(storedRoom);
       return;
     }
@@ -103,93 +104,76 @@
       ws = new WebSocket(`ws://${location.hostname}:8081/?room=${room}`);
       ws.binaryType = 'arraybuffer';
 
-      // ws.onopen = () => {
-      //   if (isReconnecting) {
-      //     ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId: sessionStorage.getItem('playerId') }}));
-      //   } else {
-      //     ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
-      //   }
-      //   startBtn.addEventListener('click', onStartClick);
-      //   rollBtn.addEventListener('click', onRollClick);
-      // };
-
-        ws.onopen = () => {
-    if (isReconnecting) {
-      ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId }}));
-    } else {
-      ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
-    }
-    // te dwie linijki dodaj raz – nie będą się zdublują dzięki wewnętrznej ochronie w addEventListener
-    startBtn.addEventListener('click', onStartClick);
-    rollBtn.addEventListener('click', onRollClick);
-  };
-
-
-
-       ws.onmessage = ({ data }) => {
-      const msg = JSON.parse(data);
-      switch (msg.type) {
-        case 'joined':
-          playerId = msg.playerId;
-          sessionStorage.setItem('playerId', playerId);
-          sessionStorage.setItem('playerName', nameInput.value.trim());
-          sessionStorage.setItem('room', room);
-          break;
-        case 'lobbyUpdate':
-          renderLobby(msg.players);
-          break;
-        case 'gameStart':
-          state = msg.state;
-          saveState();
-          // **zawsze** otwieramy UI stołu przy pierwszym starcie
-          startGame();
-          renderGame();
-          // upewniamy się, że nie jesteśmy już w trybie reconnect
-          isReconnecting = false;
-      break;
-      case 'stateUpdate':
-        state = msg.state;
-        saveState();
-        // przy reconnect dajemy też „wejście” do stołu
+      ws.onopen = () => {
         if (isReconnecting) {
-          startGame();
-          isReconnecting = false;
+          ws.send(JSON.stringify({ type:'reconnect', payload:{ playerId }}));
+        } else {
+          ws.send(JSON.stringify({ type:'join', payload:{ name: playerName }}));
         }
-      renderGame();
-      break;
-        case 'error':
-          alert(msg.msg);
-          break;
-      }
-    };
+        startBtn.addEventListener('click', onStartClick);
+        rollBtn.addEventListener('click', onRollClick);
+      };
 
+      ws.onmessage = ({ data }) => {
+        const msg = JSON.parse(data);
+        switch (msg.type) {
+          case 'joined':
+            playerId = msg.playerId;
+            sessionStorage.setItem('playerId', playerId);
+            sessionStorage.setItem('playerName', nameInput.value.trim());
+            sessionStorage.setItem('room', room);
+            break;
+          case 'lobbyUpdate':
+            // msg.players = [{id,name},...]
+            lastLobbyPlayers = msg.players;
+            renderLobby(msg.players);
+            break;
+          case 'gameStart':
+            state = msg.state;
+            saveState();
+            startGame();
+            renderGame();
+            isReconnecting = false;
+            break;
+          case 'stateUpdate':
+            state = msg.state;
+            saveState();
+            if (isReconnecting) {
+              startGame();
+              isReconnecting = false;
+            }
+            renderGame();
+            break;
+          case 'error':
+            alert(msg.msg);
+            break;
+        }
+      };
 
       ws.onclose = () => alert('Rozłączono z serwerem');
     }
 
     function onStartClick() {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (ws?.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({ type:'start' }));
     }
     function onRollClick() {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      if (!state) return;
+      if (ws?.readyState !== WebSocket.OPEN || !state) return;
       if (state.whoseTurn === playerId && state.phase === 'rolling' && state.rollsLeft[playerId] > 0) {
         ws.send(JSON.stringify({ type:'roll' }));
       }
     }
 
     function renderLobby(players) {
-      playersList.innerHTML = players.map(n => `<li>${n}</li>`).join('');
-      startBtn.disabled = !(players.length >= 2 && players[0] === nameInput.value.trim());
+      playersList.innerHTML = players.map(p => `<li>${p.name}</li>`).join('');
+      startBtn.disabled = !(players.length >= 2 && players[0].name === nameInput.value.trim());
     }
 
     function startGame() {
       lobbyDiv.style.display = 'none';
       gameDiv.style.display  = 'block';
       canvas.addEventListener('click', e => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        if (!state) return;
+        if (ws?.readyState !== WebSocket.OPEN || !state) return;
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const idx = Math.floor((x - 20) / 70);
@@ -197,115 +181,96 @@
           ws.send(JSON.stringify({ type:'lock', payload:{ index: idx } }));
         }
       });
+      initScoreboard(lastLobbyPlayers.map(p => p.id));
       renderGame();
-      initScoreboard();
     }
 
     function renderGame() {
-  if (!state || !state.dice || !state.dice[playerId]) {
-    console.warn('Brak danych do narysowania gry.');
-    return;
-  }
+      if (!state?.dice?.[playerId]) return;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.font = '20px sans-serif';
+      const dice   = state.dice[playerId];
+      const locked = state.locked[playerId];
+      dice.forEach((d,i) => {
+        const x = 20 + i*70, size = 60;
+        ctx.fillStyle = locked[i] ? '#ddd' : '#fff';
+        ctx.fillRect(x,20,size,size);
+        ctx.strokeRect(x,20,size,size);
+        ctx.fillStyle = '#000'; ctx.fillText(d, x+25, 55);
+      });
+      infoDiv.textContent =
+        `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft[playerId]}`;
+      renderScoreboard();
+    }
 
-  // tabela wyników
+    // Scoreboard functions
+    function initScoreboard(ids) {
+      const theadTr = scoreboard.querySelector('thead tr');
+      const tbody   = scoreboard.querySelector('tbody');
+      theadTr.innerHTML = '<th>Kategoria</th>';
+      tbody.innerHTML = '';
+      playerOrderIds = ids;
+      // add player headers
+      ids.forEach(id => {
+        const th = document.createElement('th'); th.textContent =
+          lastLobbyPlayers.find(p => p.id===id).name;
+        theadTr.appendChild(th);
+      });
+      // add rows
+      categories.forEach(cat => {
+        const tr = document.createElement('tr'); tr.dataset.category = cat;
+        const tdLabel = document.createElement('td'); tdLabel.textContent = cat;
+        tr.appendChild(tdLabel);
+        ids.forEach(() => {
+          const td = document.createElement('td'); td.dataset.category = cat;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
 
-  const categories = ['ones','twos','threes','fours','fives','sixes','chance','yatzee'];
-let playerOrder = []; // tu będzie kolejność graczy w pokoju
+    function renderScoreboard() {
+      const tbody = scoreboard.querySelector('tbody');
+      tbody.querySelectorAll('tr').forEach(tr => {
+        const cat = tr.dataset.category;
+        tr.querySelectorAll('td').forEach((td, idx) => {
+          if (idx===0) return;
+          const pid = playerOrderIds[idx-1];
+          const val = state.scorecard[pid][cat];
+          td.textContent = val==null ? '-' : val;
+          if (pid===playerId && state.whoseTurn===playerId && state.phase==='scoring' && val==null) {
+            td.classList.add('clickable');
+            td.onclick = () => onScoreCellClick(cat, pid);
+          } else {
+            td.classList.remove('clickable'); td.onclick=null;
+          }
+        });
+      });
+    }
 
-function initScoreboard() {
-  // wyciągamy nagłówki i ciało tabeli
-  const theadTr = scoreboard.querySelector('thead tr');
-  const tbody   = scoreboard.querySelector('tbody');
-  theadTr.innerHTML = '<th>Kategoria</th>';
-  tbody.innerHTML  = '';
+    function onScoreCellClick(category, pid) {
+      const possible = computeScore(category, state.dice[pid]);
+      const entered = prompt(`Punkty w ${category} (max ${possible}):`, possible);
+      const score = Math.max(0, Math.min(possible, Number(entered)||0));
+      ws.send(JSON.stringify({ type:'score', payload:{ category, compute: score } }));
+    }
 
-  // ustalamy kolejność graczy (np. z ostatniego msg.players)
-  playerOrder = Array.from(playersList.querySelectorAll('li')).map(li => li.textContent);
-
-  // nagłówki z nazwami graczy
-  playerOrder.forEach(name => {
-    const th = document.createElement('th');
-    th.textContent = name;
-    theadTr.appendChild(th);
-  });
-
-  // wiersze kategorii
-  categories.forEach(cat => {
-    const tr = document.createElement('tr');
-    tr.dataset.category = cat;
-    const tdLabel = document.createElement('td');
-    tdLabel.textContent = cat;
-    tr.appendChild(tdLabel);
-    playerOrder.forEach(_ => {
-      const td = document.createElement('td');
-      td.dataset.category = cat;
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  });
-}
-
-function renderScoreboard() {
-  const tbody = scoreboard.querySelector('tbody');
-  // dla każdego wiersza
-  tbody.querySelectorAll('tr').forEach(tr => {
-    const cat = tr.dataset.category;
-    tr.querySelectorAll('td').forEach((td, idx) => {
-      // idx=0 to label, więc zaczynamy od idx=1
-      if (idx === 0) return;
-      const playerName = playerOrder[idx-1];
-      // znajdź playerId po nazwie
-      const pid = Array.from(stateOrderOfPlayers())  // musisz mieć funkcję, która zwraca listę playerId w tej samej kolejności co nazwy
-                     .find(id => room.players.get(id).name === playerName);
-      const val = state.scorecard[pid][cat];
-      td.textContent = val == null ? '-' : val;
-      // kontrola kliknięcia
-      if (pid === playerId && state.whoseTurn === playerId && state.phase === 'scoring' && val == null) {
-        td.classList.add('clickable');
-      } else {
-        td.classList.remove('clickable');
+    // simple score computation for upper section and others
+    function computeScore(cat, dice) {
+      const counts = {};
+      dice.forEach(d=>counts[d]=(counts[d]||0)+1);
+      switch(cat) {
+        case 'ones': case 'twos': case 'threes':
+        case 'fours': case 'fives': case 'sixes':
+          const num = categories.indexOf(cat)+1;
+          return (counts[num]||0)*num;
+        case 'chance': return dice.reduce((a,b)=>a+b,0);
+        case 'yatzee': return Object.values(counts).some(c=>c>=5)?50:0;
+        default: return 0;
       }
-    });
-  });
-}
+    }
 
-// koniec tabeli wyników
-  
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.font = '20px sans-serif';
-  const dice   = state.dice[playerId];
-  const locked = state.locked[playerId];
-  dice.forEach((d, i) => {
-    const x = 20 + i * 70, size = 60;
-    ctx.fillStyle = locked[i] ? '#ddd' : '#fff';
-    ctx.fillRect(x, 20, size, size);
-    ctx.strokeRect(x, 20, size, size);
-    ctx.fillStyle = '#000';
-    ctx.fillText(d, x + 25, 55);
-  });
-
-  infoDiv.textContent =
-    `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft[playerId]}`;
-
-  // Aktualizacja tabeli wyników
-  renderScoreboard();
-}
-
-    function saveState() {
-  if (state) {
-    sessionStorage.setItem('gameState', JSON.stringify(state));
-  }
-}
-
-function loadState() {
-  const saved = sessionStorage.getItem('gameState');
-  if (saved) {
-    state = JSON.parse(saved);
-    startGame(); // od razu pokaż UI gry
-    renderGame();
-  }
-}
-
+    function saveState() { sessionStorage.setItem('gameState', JSON.stringify(state)); }
   })();
   </script>
 </body>
