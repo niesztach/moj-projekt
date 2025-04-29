@@ -112,7 +112,9 @@ server.on('connection', (ws, req) => {
         }
       } else if (type === 'score') {
         const { category, compute } = payload;
-        if (stateObj.whoseTurn === me && stateObj.phase === 'scoring' && stateObj.scorecard[me][category] == null) {
+        if (stateObj.whoseTurn === me && 
+          //stateObj.phase === 'scoring' &&
+          stateObj.scorecard[me][category] == null) {
           stateObj.scorecard[me][category] = compute;
           stateObj.phase = 'rolling';
           stateObj.rollsLeft[me] = 2;

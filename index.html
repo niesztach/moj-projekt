@@ -238,7 +238,9 @@
           const pid = playerOrderIds[idx-1];
           const val = state.scorecard[pid][cat];
           td.textContent = val==null ? '-' : val;
-          if (pid===playerId && state.whoseTurn===playerId && state.phase==='scoring' && val==null) {
+          if (pid===playerId && state.whoseTurn===playerId 
+          //&& state.phase==='scoring' 
+          && val==null) {
             td.classList.add('clickable');
             td.onclick = () => onScoreCellClick(cat, pid);
           } else {
