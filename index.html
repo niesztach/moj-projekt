@@ -159,7 +159,7 @@
     }
     function onRollClick() {
       if (ws?.readyState !== WebSocket.OPEN || !state) return;
-      if (state.whoseTurn === playerId && state.phase === 'rolling' && state.rollsLeft[playerId] > 0) {
+      if (state.whoseTurn === playerId && state.phase === 'rolling' && state.rollsLeft > 0) {
         ws.send(JSON.stringify({ type:'roll' }));
       }
     }
@@ -186,11 +186,11 @@
     }
 
     function renderGame() {
-      if (!state?.dice?.[playerId]) return;
+      if (!state?.dice) return;
       ctx.clearRect(0,0,canvas.width,canvas.height);
       ctx.font = '20px sans-serif';
-      const dice   = state.dice[playerId];
-      const locked = state.locked[playerId];
+      const dice   = state.dice;
+      const locked = state.locked;
       dice.forEach((d,i) => {
         const x = 20 + i*70, size = 60;
         ctx.fillStyle = locked[i] ? '#ddd' : '#fff';
@@ -199,7 +199,7 @@
         ctx.fillStyle = '#000'; ctx.fillText(d, x+25, 55);
       });
       infoDiv.textContent =
-        `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft[playerId]}`;
+   `Twój ID: ${playerId} | Tura: ${state.whoseTurn} | Faza: ${state.phase} | Rzuty: ${state.rollsLeft}`;
       renderScoreboard();
     }
 
@@ -251,7 +251,7 @@
     }
 
     function onScoreCellClick(category, pid) {
-      const possible = computeScore(category, state.dice[pid]);
+      const possible = computeScore(category, state.dice);
       const entered = prompt(`Punkty w ${category} (max ${possible}):`, possible);
       const score = Math.max(0, Math.min(possible, Number(entered)||0));
       ws.send(JSON.stringify({ type:'score', payload:{ category, compute: score } }));

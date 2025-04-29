@@ -12,15 +12,20 @@ const games = new Map();
 
 // Tworzy początkowy stan gry dla podanych playerId
 function createInitialState(playerIds) {
-  const state = { whoseTurn: playerIds[0], phase: 'rolling', dice: {}, locked: {}, rollsLeft: {}, scorecard: {} };
+  const state = {
+    whoseTurn: playerIds[0],
+    phase: 'rolling',
+    dice: [0, 0, 0, 0, 0],
+    locked: [false, false, false, false, false],
+    rollsLeft: 3,
+    scorecard: {}
+  };
   playerIds.forEach(id => {
-    state.dice[id]     = Array.from({ length: 5 }, () => Math.floor(Math.random() * 6) + 1);
-    state.locked[id]   = [false, false, false, false, false];
-    state.rollsLeft[id] = 2;
     state.scorecard[id] = {};
   });
   return state;
 }
+
 
 // Wysyła listę graczy (id + name) do wszystkich w lobby
 function broadcastLobby(roomId) {
@@ -96,36 +101,55 @@ server.on('connection', (ws, req) => {
     else if (['roll','lock','score'].includes(type)) {
       if (!room.locked || !room.state) return;
       const stateObj = room.state;
-      const me = ws.playerId;
+      const me       = ws.playerId;
+    
+      // === Rzut kostkami ===
       if (type === 'roll') {
-        if (stateObj.whoseTurn === me && stateObj.phase === 'rolling' && stateObj.rollsLeft[me] > 0) {
-          stateObj.dice[me] = stateObj.dice[me].map((d,i) => stateObj.locked[me][i] ? d : Math.floor(Math.random()*6)+1);
-          stateObj.rollsLeft[me]--;
-          if (stateObj.rollsLeft[me] === 0) stateObj.phase = 'scoring';
-          broadcastState(roomId);
-        }
-      } else if (type === 'lock') {
-        const idx = payload.index;
-        if (stateObj.whoseTurn === me && stateObj.phase === 'rolling' && idx >= 0 && idx < 5) {
-          stateObj.locked[me][idx] = !stateObj.locked[me][idx];
-          broadcastState(roomId);
-        }
-      } else if (type === 'score') {
-        const { category, compute } = payload;
-        if (stateObj.whoseTurn === me && 
-          //stateObj.phase === 'scoring' &&
-          stateObj.scorecard[me][category] == null) {
-          stateObj.scorecard[me][category] = compute;
-          stateObj.phase = 'rolling';
-          stateObj.rollsLeft[me] = 2;
-          stateObj.locked[me] = [false,false,false,false,false];
-          const keys = Array.from(room.players.keys());
-          const idx = keys.indexOf(me);
-          stateObj.whoseTurn = keys[(idx+1) % keys.length];
+        if (stateObj.whoseTurn === me && stateObj.phase === 'rolling' && stateObj.rollsLeft > 0) {
+          stateObj.dice = stateObj.dice.map((d, i) =>
+            stateObj.locked[i] ? d : Math.floor(Math.random() * 6) + 1
+          );
+          stateObj.rollsLeft--;
+          if (stateObj.rollsLeft === 0) stateObj.phase = 'scoring';
           broadcastState(roomId);
         }
       }
+      
+    
+      // === Zablokowanie / odblokowanie kostki ===
+      else if (type === 'lock') {
+        const idx = payload.index;
+        if (stateObj.whoseTurn === me &&
+            stateObj.phase === 'rolling' &&
+            idx >= 0 && idx < 5) {
+              stateObj.locked[idx] = !stateObj.locked[idx];
+          broadcastState(roomId);
+        }
+      }
+    
+      // === Zapisanie punktów ===
+      else if (type === 'score') {
+        const { category, compute } = payload;
+        if (stateObj.whoseTurn === me && stateObj.scorecard[me][category] == null) {
+          stateObj.scorecard[me][category] = compute;
+      
+          // Reset tury
+          const keys = Array.from(room.players.keys());
+          const idx = keys.indexOf(me);
+          const next = keys[(idx + 1) % keys.length];
+      
+          stateObj.whoseTurn = next;
+          stateObj.phase = 'rolling';
+          stateObj.dice = [0, 0, 0, 0, 0];
+          stateObj.locked = [false, false, false, false, false];
+          stateObj.rollsLeft = 3;
+      
+          broadcastState(roomId);
+        }
+      }
+      
     }
+    
   });
 
   // Pozwól na reconnect
